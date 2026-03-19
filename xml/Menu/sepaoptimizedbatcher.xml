@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<menu>
+  <item>
+    <path>civicrm/sepa/optimizedbatcher</path>
+    <page_callback>CRM_Sepaoptimizedbatcher_Form_OptmizedBatcher</page_callback>
+    <title>OptmizedBatcher</title>
+    <access_arguments>view sepa groups</access_arguments>
+  </item>
+</menu>

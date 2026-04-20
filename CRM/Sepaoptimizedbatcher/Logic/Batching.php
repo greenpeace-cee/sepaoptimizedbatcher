@@ -269,7 +269,7 @@ class CRM_Sepaoptimizedbatcher_Logic_Batching {
               "contact_id"                          => $mandate['contribution_recur.contact_id'],
               "contribution_recur_id"               => $recur_id,
               "source"                              => $mandate['mandate_source'],
-              "financial_type_id"                   => $mandate['contribution_recur.financial_type_id'],
+              "financial_type_id"                   => $financial_type,
               "contribution_status_id"              => $mandate['contribution_recur.contribution_status_id'],
               "campaign_id"                         => $mandate['contribution_recur.campaign_id'],
               "is_test"                             => $mandate['contribution_recur.is_test'],
@@ -288,13 +288,13 @@ class CRM_Sepaoptimizedbatcher_Logic_Batching {
             // 'mandate_entity_id' will now be overwritten with the contribution instance ID
             //  to allow compatibility in with OOFF groups in the syncGroups function
             $mandates_by_nextdate[$collection_date][$financial_type][$index]['mandate_entity_id'] = $contribution['id'];
-            } catch (\Exception $e) {
+            } catch (\Throwable $e) {
               // in case of an error, we will unset 'mandate_entity_id', so it cannot be
               //  interpreted as the contribution instance ID (see above)
               unset($mandates_by_nextdate[$collection_date][$financial_type][$index]['mandate_entity_id']);
 
               // log the error
-              Civi::log()->debug("org.project60.sepa: batching:updateRCUR/createContrib ".$e->getMessage());
+              Civi::log()->debug("org.project60.sepa: batching:updateRCUR/createContrib ".$e->getMessage() . " for recur id: " . $recur_id);
 
               // TODO: Error handling?
             }

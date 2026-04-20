@@ -50,13 +50,15 @@ function sepaoptimizedbatcher_civicrm_pageRun($page) {
 }
 
 function _sepaoptimizedbatcher_check_running_jobs() {
-  $count = $userJobs = \Civi\Api4\UserJob::get(FALSE)
-  ->selectRowCount()
+  $userJobs = \Civi\Api4\UserJob::get(FALSE)
+  ->addSelect('id', 'row_count')
   ->addWhere('name', 'LIKE', 'sdd_update_%')
-  ->addWhere('status_id:name', 'IN', [4, 5, 3, 'scheduled', 'incomplete', 'in_progress'])
-  ->execute()
-  ->countMatched();
+  ->addWhere('status_id:name', 'IN', ['scheduled', 'incomplete', 'in_progress'])
+  ->execute();
+  $count = $userJobs->countMatched();
   if ($count) {
-    CRM_Core_Session::setStatus(E::ts('There are jobs running to update recurring mandates.'), E::ts('Update in progress'), 'alert');
+    $job = $userJobs->first();
+    $monitorUrl = CRM_Utils_System::url('civicrm/sepa/optimizedbatcher/monitor', ['user_job_id' => $job['id']]);
+    CRM_Core_Session::setStatus(E::ts('There are jobs running to update recurring mandates.') . '<br><a href="' . $monitorUrl . '">' . E::ts('Monitor background job').'</a>', E::ts('Update in progress'), 'alert');
   }
 }

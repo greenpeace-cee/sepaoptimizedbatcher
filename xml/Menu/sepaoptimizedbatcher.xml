@@ -6,4 +6,10 @@
     <title>OptmizedBatcher</title>
     <access_arguments>view sepa groups</access_arguments>
   </item>
+  <item>
+    <path>civicrm/sepa/optimizedbatcher/monitor</path>
+    <page_callback>CRM_Sepaoptimizedbatcher_Page_Monitor</page_callback>
+    <title>OptmizedBatcher</title>
+    <access_arguments>view sepa groups</access_arguments>
+  </item>
 </menu>

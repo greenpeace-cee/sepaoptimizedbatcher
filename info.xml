@@ -1,13 +1,13 @@
 <?xml version="1.0"?>
 <extension key="sepaoptimizedbatcher" type="module">
   <file>sepaoptimizedbatcher</file>
-  <name>sepaoptimizedbatcher</name>
-  <description>FIXME</description>
+  <name>SEPA Optmized Batcher</name>
+  <description>This extension improves the performance updating recurring contributions for CiviSepa</description>
   <license>AGPL-3.0</license>
   <authors>
     <author>
-      <name>FIXME</name>
-      <email>FIXME</email>
+      <name>Jaap Jansma</name>
+      <email>jaap.jansma@civicoop.org</email>
       <role>Maintainer</role>
     </author>
   </authors>
@@ -17,13 +17,13 @@
     <url desc="Support">https://FIXME</url>
     <url desc="Licensing">https://www.gnu.org/licenses/agpl-3.0.html</url>
   </urls>
-  <releaseDate>2026-03-12</releaseDate>
+  <releaseDate>2026-04-20</releaseDate>
   <version>1.0.0</version>
-  <develStage>alpha</develStage>
+  <develStage>stable</develStage>
   <compatibility>
     <ver>6.10</ver>
   </compatibility>
-  <comments>This is a new, undeveloped module</comments>
+  <comments>Funded by Amnesty Flanders</comments>
   <classloader>
     <psr0 prefix="CRM_" path="."/>
     <psr4 prefix="Civi\" path="Civi"/>

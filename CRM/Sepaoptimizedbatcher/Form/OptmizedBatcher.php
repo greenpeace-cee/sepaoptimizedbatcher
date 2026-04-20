@@ -7,6 +7,7 @@ class CRM_Sepaoptimizedbatcher_Form_OptmizedBatcher extends CRM_Core_Form {
 
   public function buildQuickForm()
   {
+    CRM_Utils_System::setTitle(E::ts('Update recurring'));
     _sepaoptimizedbatcher_check_running_jobs();
     $this->addCheckBox('what', E::ts('What to do?'), [
       'repair' => E::ts('Repair'),
@@ -37,7 +38,6 @@ class CRM_Sepaoptimizedbatcher_Form_OptmizedBatcher extends CRM_Core_Form {
     }
     // use the runner rather that the API (this doesn't return)
     CRM_Sepaoptimizedbatcher_Logic_Queue::launchUpdateRunner($what);
-
     CRM_Utils_System::redirect(CRM_Utils_System::url('civicrm/sepa/dashboard', 'status=active'));
   }
 

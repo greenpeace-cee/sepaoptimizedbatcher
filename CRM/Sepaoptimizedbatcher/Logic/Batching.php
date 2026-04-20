@@ -1,7 +1,6 @@
 <?php
 
 use Civi\Api4\ContributionRecur;
-use Civi\Sepa\Lock\SepaBatchLockManager;
 
 /**
  * @author Jaap Jansma <jaap.jansma@civicoop.org>
@@ -11,12 +10,6 @@ use Civi\Sepa\Lock\SepaBatchLockManager;
 class CRM_Sepaoptimizedbatcher_Logic_Batching {
 
   public static function repairRCUR($creditor_id, $mode, $now = 'now', $offset=NULL, $limit=NULL) {
-    // check lock
-    /*$lock = SepaBatchLockManager::getInstance()->getLock();
-    if (!$lock->acquire()) {
-      return "Batching in progress. Please try again later.";
-    }*/
-
     if ($offset !== NULL && $limit!==NULL) {
       $batch_clause = "LIMIT {$limit} OFFSET {$offset}";
     }
@@ -48,6 +41,7 @@ class CRM_Sepaoptimizedbatcher_Logic_Batching {
         'source',
         'creditor_id',
         'first_contribution.receive_date',
+        'contribution_recur.id',
         'contribution_recur.cycle_day',
         'contribution_recur.frequency_interval',
         'contribution_recur.frequency_unit',
@@ -64,12 +58,8 @@ class CRM_Sepaoptimizedbatcher_Logic_Batching {
         'contribution_recur.payment_instrument_id',
         'contribution_recur.next_sched_contribution_date'
       )
-      ->addJoin(
-        'ContributionRecur AS contribution_recur',
-        'INNER',
-        ['entity_table', '=', '"civicrm_contribution_recur"'],
-        ['entity_id', '=', 'contribution_recur.id']
-      )
+      ->addJoin('ContributionRecur AS contribution_recur', 'INNER',['entity_table', '=', '"civicrm_contribution_recur"'],['entity_id', '=', 'contribution_recur.id'])
+      ->addJoin('Contribution AS first_contribution','LEFT',['first_contribution_id', '=', 'first_contribution.id'])
       ->addWhere('type', '=', 'RCUR')
       ->addWhere('status', '=', $mode)
       ->addWhere('creditor_id', '=', $creditor_id)
@@ -121,12 +111,7 @@ class CRM_Sepaoptimizedbatcher_Logic_Batching {
   }
 
   public static function updateRCUR($creditor_id, $mode, $now = 'now', $offset=NULL, $limit=NULL) {
-    // check lock
-    /*$lock = SepaBatchLockManager::getInstance()->getLock();
-    if (!$lock->acquire()) {
-      return "Batching in progress. Please try again later.";
-    }*/
-
+    $mandates_by_nextdate = [];
     $horizon = (int) CRM_Sepa_Logic_Settings::getSetting("batching.RCUR.horizon", $creditor_id);
     $latest_date = date('Y-m-d', strtotime("$now +$horizon days"));
 
@@ -159,7 +144,7 @@ class CRM_Sepaoptimizedbatcher_Logic_Batching {
         `contribution_recur`.`currency`,
         `contribution_recur`.`campaign_id`,
         `contribution_recur`.`payment_instrument_id`,
-        `contribution_recur`.`next_sched_contribution_date`
+        DATE(`contribution_recur`.`next_sched_contribution_date`) AS `next_sched_contribution_date`
         FROM `civicrm_sdd_mandate`
         INNER JOIN `civicrm_contribution_recur` `contribution_recur` ON `contribution_recur`.`id` = `civicrm_sdd_mandate`.`entity_id` AND `civicrm_sdd_mandate`.`entity_table` = 'civicrm_contribution_recur'
         LEFT JOIN `civicrm_contribution` `first_contribution` ON `civicrm_sdd_mandate`.`first_contribution_id` = `first_contribution`.`id`
@@ -297,16 +282,12 @@ class CRM_Sepaoptimizedbatcher_Logic_Batching {
               ->execute()
               ->first();
 
-            //$contribution = civicrm_api('Contribution', 'create', $contribution_data);
-            //if (empty($contribution['is_error'])) {
-              // Success! Call the post_create hook
-              CRM_Utils_SepaCustomisationHooks::installment_created($mandate['mandate_id'], $recur_id, $contribution['id']);
+            // Success! Call the post_create hook
+            CRM_Utils_SepaCustomisationHooks::installment_created($mandate['mandate_id'], $recur_id, $contribution['id']);
 
-              // 'mandate_entity_id' will now be overwritten with the contribution instance ID
-              //  to allow compatibility in with OOFF groups in the syncGroups function
-              $mandates_by_nextdate[$collection_date][$financial_type][$index]['mandate_entity_id'] = $contribution['id'];
-            //}
-            //else {
+            // 'mandate_entity_id' will now be overwritten with the contribution instance ID
+            //  to allow compatibility in with OOFF groups in the syncGroups function
+            $mandates_by_nextdate[$collection_date][$financial_type][$index]['mandate_entity_id'] = $contribution['id'];
             } catch (\Exception $e) {
               // in case of an error, we will unset 'mandate_entity_id', so it cannot be
               //  interpreted as the contribution instance ID (see above)

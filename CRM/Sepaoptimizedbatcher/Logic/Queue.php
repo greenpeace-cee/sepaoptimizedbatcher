@@ -2,7 +2,6 @@
 
 use Civi\Api4\UserJob;
 use CRM_Sepaoptimizedbatcher_ExtensionUtil as E;
-use Civi\Sepa\Lock\SepaBatchLockManager;
 
 /**
  * @author Jaap Jansma <jaap.jansma@civicoop.org>
@@ -13,28 +12,24 @@ class CRM_Sepaoptimizedbatcher_Logic_Queue {
 
   private const BATCH_SIZE = 250;
 
-  public string $title;
-  public $runAs;
-  private string $cmd;
-  private string $mode;
-  private $creditorId;
-  private ?int $offset;
-  private ?int $limit;
+  private static $currentUserJobId = null;
 
-  private string $asyncLockId;
-
-  public static function createUserJob(): int {
+  public static function createUserJob(int $totalNumberOfTasks=0): int {
     $id = UserJob::create(FALSE)
       ->setValues([
         'created_id' => CRM_Core_Session::getLoggedInContactID(),
         'job_type' => 'sepaoptimizedbatcher',
         'status_id:name' => 'draft',
         // This suggests the data could be cleaned up after this.
-        'expires_date' => '+ 1 week',
-        'metadata' => [],
+        'expires_date' => '+2 days',
+        'metadata' => [
+          'totalNumberOfTasks' => $totalNumberOfTasks,
+          'numberOfTasksExecuted' => 0,
+        ],
       ])
       ->execute()
       ->first()['id'];
+    self::$currentUserJobId = $id;  
     return $id;
   }
 
@@ -47,6 +42,9 @@ class CRM_Sepaoptimizedbatcher_Logic_Queue {
    * @return CRM_Queue_Task
    */
   private static function createTask($cmd, $params = []) {
+    if (self::$currentUserJobId) {
+      $params['user_job_id'] = self::$currentUserJobId;
+    }
     $task = new CRM_Queue_Task(
       ['CRM_Sepaoptimizedbatcher_Logic_Queue', 'run'],
       [$cmd, $params],
@@ -63,14 +61,6 @@ class CRM_Sepaoptimizedbatcher_Logic_Queue {
 
   public static function launchUpdateRunner(array $what) {
     $userJobId = static::createUserJob();
-    $asyncLockId = uniqid('', TRUE);
-    if (!SepaBatchLockManager::getInstance()->acquire(0, $asyncLockId)) {
-      SepaBatchLockManager::getInstance()->release($asyncLockId);
-      CRM_Core_Session::setStatus(E::ts('Cannot run update, another update is in progress!'), E::ts('Error'), 'error');
-      $redirectUrl = CRM_Utils_System::url('civicrm/sepa/dashboard', 'status=active');
-      CRM_Utils_System::redirect($redirectUrl);
-      return; // shouldn't be necessary
-    }
     
     // create a queue
     $queue = Civi::queue('sdd_update_sequential', [
@@ -86,33 +76,37 @@ class CRM_Sepaoptimizedbatcher_Logic_Queue {
     $queue->createItem(self::createTask('CLOSE', ['mode' => 'RCUR']), ['weight' => 0]);
 
     // then iterate through all creditors
-    $creditors = civicrm_api3('SepaCreditor', 'get', array('option.limit' => 0));
-    foreach ($creditors['values'] as $creditor) {
-      $sdd_modes = array('FRST', 'RCUR');
-      foreach ($sdd_modes as $sdd_mode) {
-        $count = self::getMandateCount($creditor['id'], $sdd_mode);
-        if (!empty($what['repair']) || !empty($what['collection_date'])) {
+    if (!empty($what['repair'])) {
+      $creditors = civicrm_api3('SepaCreditor', 'get', array('option.limit' => 0));
+      foreach ($creditors['values'] as $creditor) {
+        $sdd_modes = array('FRST', 'RCUR');
+        foreach ($sdd_modes as $sdd_mode) {
+          $count = self::getMandateCount($creditor['id'], $sdd_mode);
           for ($offset=0; $offset < $count; $offset+=self::BATCH_SIZE) {
-            if (!empty($what['repair'])) {
-              $queue->createItem(self::createTask('REPAIR', ['mode' => $sdd_mode, 'creditor_id' => $creditor['id'], 'offset' => $offset, 'limit' => self::BATCH_SIZE, 'count' => $count]), ['weight' => 1]);
-            }
-            if (!empty($what['collection_date'])) {
-              $queue->createItem(self::createTask('COLLECTION_DATE', ['mode' => $sdd_mode, 'creditor_id' => $creditor['id'], 'offset' => $offset, 'limit' => self::BATCH_SIZE, 'count' => $count]), ['weight' => 2]);
-            }
+            $queue->createItem(self::createTask('REPAIR', ['mode' => $sdd_mode, 'creditor_id' => $creditor['id'], 'offset' => $offset, 'limit' => self::BATCH_SIZE, 'count' => $count]), ['weight' => 1]);
           }  
         }
       }
     }
 
-    if (!empty($what['update'])) {
-      $queue->createItem(self::createTask('PREPARE_UPDATE', []), ['weight' => 3]);
+    if (!empty($what['collection_date'])) {
+      $queue->createItem(self::createTask('PREPARE_COLLECTION_DATE', []), ['weight' => 3]);
     }
+    if (!empty($what['update'])) {
+      $queue->createItem(self::createTask('PREPARE_UPDATE', []), ['weight' => 5]);
+    }
+
+    $totalTasks = (int) $queue->getStatistic('total') ?? 0;
 
     UserJob::update(FALSE)
       ->setValues([
-        'name' => 'sdd_update_sequential_' . $userJobId,
+        'name' => 'sdd_update_' . $userJobId,
         'queue_id.name' => 'sdd_update_sequential',
         'status_id:name' => 'scheduled',
+        'metadata' => [
+          'totalNumberOfTasks' => $totalTasks,
+          'numberOfTasksExecuted' => 0,
+        ],
       ])
       ->addWhere('id', '=', $userJobId)
       ->execute();
@@ -126,7 +120,29 @@ class CRM_Sepaoptimizedbatcher_Logic_Queue {
       'onEndUrl'  => CRM_Utils_System::url('civicrm/sepa/dashboard', 'status=active', FALSE, NULL, FALSE),
     ));
 
-    $runner->runAllInteractive(); // does not return
+    $url = $runner->runAllInteractive(FALSE); 
+    if (Civi::settings()->get('enableBackgroundQueue')) {
+      $url = CRM_Utils_System::url('civicrm/sepa/optimizedbatcher/monitor', 'user_job_id='.$userJobId, FALSE, NULL, FALSE);
+    }
+    CRM_Utils_System::redirect($url);
+  }
+
+  private static function increateCountOfTasksExecuted($increaseOfTasksExecuted = 1) {
+    if (self::$currentUserJobId) {
+      $job = UserJob::get(FALSE)->addWhere('id', '=', self::$currentUserJobId)->execute()->first();
+      $metadata = $job['metadata'];
+      $metadata['numberOfTasksExecuted'] = $metadata['numberOfTasksExecuted'] + $increaseOfTasksExecuted;
+      UserJob::update(FALSE)->setValues(['metadata' => $metadata])->addWhere('id', '=', self::$currentUserJobId)->execute();
+    }
+  }
+
+  private static function increateCountOfTasks($increaseOfTasks = 1) {
+    if (self::$currentUserJobId) {
+      $job = UserJob::get(FALSE)->addWhere('id', '=', self::$currentUserJobId)->execute()->first();
+      $metadata = $job['metadata'];
+      $metadata['totalNumberOfTasks'] = $metadata['totalNumberOfTasks'] + $increaseOfTasks;
+      UserJob::update(FALSE)->setValues(['metadata' => $metadata])->addWhere('id', '=', self::$currentUserJobId)->execute();
+    }
   }
 
     /**
@@ -137,7 +153,6 @@ class CRM_Sepaoptimizedbatcher_Logic_Queue {
    * @return string
    */
   private static function taskTitle($cmd, $params) {
-    $creditor_id = $params['creditor_id'] ?? NULL;
     $mode = $params['mode'] ?? '[unknown]';
     $offset = $params['offset'] ?? 0;
     $limit = $params['limit'] ?? 0;
@@ -171,6 +186,10 @@ class CRM_Sepaoptimizedbatcher_Logic_Queue {
 
       case 'WATCH_UPDATE':
         return E::ts("Watch $mode for updating mandates", [1 => $offset,2 => $offset + $limit,]);
+        break;
+        
+      case 'FINISH':
+        return E::ts("Finishing");
         break;  
 
       default:
@@ -179,14 +198,18 @@ class CRM_Sepaoptimizedbatcher_Logic_Queue {
     }
   }
 
-  public static function run($context, $cmd, $params): bool {
+  public static function run(CRM_Queue_TaskContext $context, $cmd, $params): bool {
     $creditorId = $params['creditor_id'] ?? NULL;
     $mode = $params['mode'] ?? '[unknown]';
     $offset = $params['offset'] ?? 0;
     $limit = $params['limit'] ?? 0;
+    if (isset($params['user_job_id'])) {
+      self::$currentUserJobId = $params['user_job_id'];
+    }
 
     \CRM_Core_Config::setPermitCacheFlushMode(FALSE);
 
+    $totalExecutedTasks = 1;
     switch ($cmd) {
       case 'CLOSE':
         CRM_Sepa_Logic_Batching::closeEnded();
@@ -196,16 +219,12 @@ class CRM_Sepaoptimizedbatcher_Logic_Queue {
         CRM_Sepaoptimizedbatcher_Logic_Batching::repairRCUR($creditorId, $mode, 'now', $offset, $limit);
         break;
 
-      case 'COLLECTION_DATE':
-        CRM_Sepaoptimizedbatcher_Logic_Batching::updateNextScheduledDateRCUR($creditorId, $mode, 'now', $offset, $limit);
-        break;
-      
-      case 'PREPARE_UPDATE':
-        $batchSize = self::BATCH_SIZE;
+      case 'PREPARE_COLLECTION_DATE':
         $queue = $context->queue;
         $bgqueue_enabled = (bool) Civi::settings()->get('enableBackgroundQueue');
         $weight = 4;
         if ($bgqueue_enabled) {
+          $increateTaskCount = 1;
           // Create a parralel queue for parralel processing.
           // This queue is executed by coworker.
           // We have a separate job to check whether the queue is done.
@@ -218,7 +237,44 @@ class CRM_Sepaoptimizedbatcher_Logic_Queue {
             'type'   => 'SqlParallel',
           ]);
           $weight = 0;
-          $batchSize = 1;
+        }
+
+        $creditors = civicrm_api3('SepaCreditor', 'get', array('option.limit' => 0));
+        foreach ($creditors['values'] as $creditor) {
+          $sdd_modes = array('FRST', 'RCUR');
+          foreach ($sdd_modes as $sdd_mode) {
+            $count = self::getMandateCount($creditor['id'], $sdd_mode);
+            for ($offset=0; $offset < $count; $offset+=self::BATCH_SIZE) {
+              $queue->createItem(self::createTask('COLLECTION_DATE', ['mode' => $sdd_mode, 'creditor_id' => $creditor['id'], 'offset' => $offset, 'limit' => self::BATCH_SIZE, 'count' => $count]), ['weight' => 2]);
+              $increateTaskCount++;
+            }  
+          }
+        }
+        self::increateCountOfTasks($increateTaskCount);
+        break;  
+
+      case 'COLLECTION_DATE':
+        CRM_Sepaoptimizedbatcher_Logic_Batching::updateNextScheduledDateRCUR($creditorId, $mode, 'now', $offset, $limit);
+        break;
+      
+      case 'PREPARE_UPDATE':
+        $queue = $context->queue;
+        $bgqueue_enabled = (bool) Civi::settings()->get('enableBackgroundQueue');
+        $weight = 6;
+        if ($bgqueue_enabled) {
+          $increateTaskCount = 1;
+          // Create a parralel queue for parralel processing.
+          // This queue is executed by coworker.
+          // We have a separate job to check whether the queue is done.
+          $parralelQueueName = 'sdd_update_parallel';
+          $queue->createItem(self::createTask('WATCH_UPDATE', ['queue_name_to_check' => $parralelQueueName]), ['weight' => 4]);
+          $queue = Civi::queue($parralelQueueName, [
+            'error'  => 'abort',
+            'reset'  => TRUE,
+            'runner' => 'task',
+            'type'   => 'SqlParallel',
+          ]);
+          $weight = 0;
         }
 
         $now = 'now';
@@ -238,17 +294,22 @@ class CRM_Sepaoptimizedbatcher_Logic_Queue {
               ->addWhere('contribution_recur.next_sched_contribution_date', '<=', $latest_date)
               ->execute()
               ->countMatched();
-            for ($offset=0; $offset < $relevantMandateCount; $offset+=$batchSize) {
+            for ($offset=0; $offset < $relevantMandateCount; $offset+=self::BATCH_SIZE) {
               // add an item for each batch
-              $queue->createItem(self::createTask('UPDATE', ['mode'=>$sdd_mode, 'creditor_id' => $creditor['id'], 'offset' => $offset, 'limit' => $batchSize, 'count' => $relevantMandateCount]), ['weight' => $weight]);
+              $queue->createItem(self::createTask('UPDATE', ['mode'=>$sdd_mode, 'creditor_id' => $creditor['id'], 'offset' => $offset, 'limit' => self::BATCH_SIZE, 'count' => $relevantMandateCount]), ['weight' => $weight]);
+              $increateTaskCount++;
             }
           }
         }
-        $queue->createItem(self::createTask('CLEANUP', ['mode' => 'FRST']), ['weight' => 999]);
-        $queue->createItem(self::createTask('CLEANUP', ['mode' => 'RCUR']), ['weight' => 999]);
+        $queue->createItem(self::createTask('CLEANUP', ['mode' => 'FRST']), ['weight' => 998]);
+        $queue->createItem(self::createTask('CLEANUP', ['mode' => 'RCUR']), ['weight' => 998]);
+        $queue->createItem(self::createTask('FINISH', []), ['weight' => 999]);
+        $increateTaskCount = $increateTaskCount + 3;
+        self::increateCountOfTasks($increateTaskCount);
         break;
       
       case 'WATCH_UPDATE':
+        $totalExecutedTasks = 0;
         $parralelQueueName = $params['queue_name_to_check'];
         $queueStatus = CRM_Core_DAO::singleValueQuery("SELECT `status` FROM civicrm_queue WHERE `name` = %1", [1=>[$parralelQueueName, 'String']]);
         if ($queueStatus == 'aborted') {
@@ -269,8 +330,16 @@ class CRM_Sepaoptimizedbatcher_Logic_Queue {
         CRM_Sepa_Logic_Group::cleanup($mode);
         break;
 
-      default:
-        return FALSE;
+      case 'FINISH':
+        UserJob::update(FALSE)
+          ->setValues(['status_id:name' => 'completed'])
+          ->addWhere('id', '=', self::$currentUserJobId)
+          ->execute();
+        break;  
+    }
+
+    if ($totalExecutedTasks > 0) {
+      self::increateCountOfTasksExecuted($totalExecutedTasks);
     }
 
     return TRUE;

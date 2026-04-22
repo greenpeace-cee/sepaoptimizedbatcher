@@ -115,6 +115,11 @@ class CRM_Sepaoptimizedbatcher_Logic_Batching {
     $horizon = (int) CRM_Sepa_Logic_Settings::getSetting("batching.RCUR.horizon", $creditor_id);
     $latest_date = date('Y-m-d', strtotime("$now +$horizon days"));
 
+    $grace_period = (int) CRM_Sepa_Logic_Settings::getSetting("batching.RCUR.grace", $creditor_id);
+    $rcur_notice = (int) CRM_Sepa_Logic_Settings::getSetting("batching.$mode.notice", $creditor_id);
+    $now = strtotime("$now +$rcur_notice days -$grace_period days");
+    $now = strtotime(date('Y-m-d', $now));
+
     $rcur_notice = (int) CRM_Sepa_Logic_Settings::getSetting("batching.$mode.notice", $creditor_id);
     $group_status_id_open = (int) CRM_Core_PseudoConstant::getKey('CRM_Batch_BAO_Batch', 'status_id', 'Open');
 
@@ -209,6 +214,17 @@ class CRM_Sepaoptimizedbatcher_Logic_Batching {
       if (NULL === $next_date || $next_date > $latest_date) {
         continue;
       }
+      if ($next_date < $now) {
+        // Recalculate next contribution date for contributions in the past
+        $deferred_collection_date = CRM_Sepa_Logic_Batching::getNextExecutionDate($mandate, $now, ($mode=='FRST'));
+        if (NULL !== $deferred_collection_date) {
+          CRM_Sepa_Logic_Batching::deferCollectionDate($deferred_collection_date, $creditor_id);
+          if ($deferred_collection_date != $next_date) {
+            $next_date = $deferred_collection_date;
+          }
+        }
+      }
+      
       if (!isset($mandates_by_nextdate[$next_date])) {
         $mandates_by_nextdate[$next_date] = [];
       }

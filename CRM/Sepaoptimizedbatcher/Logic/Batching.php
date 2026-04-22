@@ -217,11 +217,12 @@ class CRM_Sepaoptimizedbatcher_Logic_Batching {
       if ($next_date < $now) {
         // Recalculate next contribution date for contributions in the past
         $deferred_collection_date = CRM_Sepa_Logic_Batching::getNextExecutionDate($mandate, $now, ($mode=='FRST'));
-        if (NULL !== $deferred_collection_date) {
-          CRM_Sepa_Logic_Batching::deferCollectionDate($deferred_collection_date, $creditor_id);
-          if ($deferred_collection_date != $next_date) {
-            $next_date = $deferred_collection_date;
-          }
+        if (NULL === $deferred_collection_date) {
+          continue;
+        }
+        CRM_Sepa_Logic_Batching::deferCollectionDate($deferred_collection_date, $creditor_id);
+        if ($deferred_collection_date != $next_date) {
+          $next_date = $deferred_collection_date;
         }
       }
       

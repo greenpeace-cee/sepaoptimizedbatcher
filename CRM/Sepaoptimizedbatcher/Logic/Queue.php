@@ -95,6 +95,7 @@ class CRM_Sepaoptimizedbatcher_Logic_Queue {
     if (!empty($what['update'])) {
       $queue->createItem(self::createTask('PREPARE_UPDATE', []), ['weight' => 5]);
     }
+    $queue->createItem(self::createTask('FINISH', []), ['weight' => 999]);
 
     $totalTasks = (int) $queue->getStatistic('total') ?? 0;
 
@@ -181,7 +182,7 @@ class CRM_Sepaoptimizedbatcher_Logic_Queue {
         break;  
 
       case 'UPDATE':
-        return E::ts("Process $mode mandates (%1-%2)", [1 => $offset,2 => $offset + $limit,]);
+        return E::ts("Process $mode mandates (%1-%2) / %3", [1 => $offset,2 => $offset + $limit, 3=>$count]);
         break;
 
       case 'WATCH_UPDATE':
@@ -262,7 +263,6 @@ class CRM_Sepaoptimizedbatcher_Logic_Queue {
         $bgqueue_enabled = (bool) Civi::settings()->get('enableBackgroundQueue');
         $weight = 6;
         if ($bgqueue_enabled) {
-          $increateTaskCount = 1;
           // Create a parralel queue for parralel processing.
           // This queue is executed by coworker.
           // We have a separate job to check whether the queue is done.
@@ -303,8 +303,7 @@ class CRM_Sepaoptimizedbatcher_Logic_Queue {
         }
         $queue->createItem(self::createTask('CLEANUP', ['mode' => 'FRST']), ['weight' => 998]);
         $queue->createItem(self::createTask('CLEANUP', ['mode' => 'RCUR']), ['weight' => 998]);
-        $queue->createItem(self::createTask('FINISH', []), ['weight' => 999]);
-        $increateTaskCount = $increateTaskCount + 3;
+        $increateTaskCount = $increateTaskCount + 2;
         self::increateCountOfTasks($increateTaskCount);
         break;
       

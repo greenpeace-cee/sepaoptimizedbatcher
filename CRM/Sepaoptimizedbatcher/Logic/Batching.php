@@ -211,10 +211,7 @@ class CRM_Sepaoptimizedbatcher_Logic_Batching {
 
       // RCUR-STEP 2: calculate next execution date
       $next_date = $mandate['contribution_recur.next_sched_contribution_date'];
-      if (NULL === $next_date || $next_date > $latest_date) {
-        continue;
-      }
-      if ($next_date < $now) {
+      if ($next_date === NULL || strtotime($next_date) < $now) {
         // Recalculate next contribution date for contributions in the past
         $deferred_collection_date = CRM_Sepa_Logic_Batching::getNextExecutionDate($mandate, $now, ($mode=='FRST'));
         if (NULL === $deferred_collection_date) {
@@ -224,6 +221,9 @@ class CRM_Sepaoptimizedbatcher_Logic_Batching {
         if ($deferred_collection_date != $next_date) {
           $next_date = $deferred_collection_date;
         }
+      }
+      if (NULL === $next_date || $next_date > $latest_date) {
+        continue;
       }
       
       if (!isset($mandates_by_nextdate[$next_date])) {

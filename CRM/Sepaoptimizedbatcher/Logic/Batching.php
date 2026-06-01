@@ -110,7 +110,7 @@ class CRM_Sepaoptimizedbatcher_Logic_Batching {
     }
   }
 
-  public static function updateRCUR($creditor_id, $mode, $now = 'now', $offset=NULL, $limit=NULL) {
+  public static function updateRCUR($creditor_id, $mode, $now = 'now', $ids=[]) {
     $mandates_by_nextdate = [];
     $horizon = (int) CRM_Sepa_Logic_Settings::getSetting("batching.RCUR.horizon", $creditor_id);
     $latest_date = date('Y-m-d', strtotime("$now +$horizon days"));
@@ -153,18 +153,9 @@ class CRM_Sepaoptimizedbatcher_Logic_Batching {
         FROM `civicrm_sdd_mandate`
         INNER JOIN `civicrm_contribution_recur` `contribution_recur` ON `contribution_recur`.`id` = `civicrm_sdd_mandate`.`entity_id` AND `civicrm_sdd_mandate`.`entity_table` = 'civicrm_contribution_recur'
         LEFT JOIN `civicrm_contribution` `first_contribution` ON `civicrm_sdd_mandate`.`first_contribution_id` = `first_contribution`.`id`
-        WHERE `civicrm_sdd_mandate`.`type` = 'RCUR' 
-        AND `civicrm_sdd_mandate`.`status` = %1
-        AND `civicrm_sdd_mandate`.`creditor_id` = %2
-        AND `contribution_recur`.`next_sched_contribution_date` <= DATE(%3)
-        ORDER BY `contribution_recur`.`next_sched_contribution_date` ASC
-        LIMIT %4, %5";
-    $sqlParams[1] = [$mode, 'String'];
-    $sqlParams[2] = [$creditor_id, 'Integer'];
-    $sqlParams[3] = [$latest_date, 'String'];
-    $sqlParams[4] = [$offset, 'Integer'];
-    $sqlParams[5] = [$limit, 'Integer'];
-    $dao = CRM_Core_DAO::executeQuery($sql, $sqlParams);
+        WHERE `civicrm_sdd_mandate`.`id` IN (" . implode(",", $ids) . ")
+        ORDER BY `contribution_recur`.`next_sched_contribution_date` ASC";
+    $dao = CRM_Core_DAO::executeQuery($sql);
     while($dao->fetch()) {
       $mandate['id'] = $dao->id;
       $mandate['contact_id'] = $dao->contact_id;
@@ -346,9 +337,7 @@ class CRM_Sepaoptimizedbatcher_Logic_Batching {
         $existing_groups,
         $mode,
         $rcur_notice,
-        $creditor_id,
-        NULL !== $offset,
-        0 === $offset
+        $creditor_id
       );
     }
   }
@@ -368,9 +357,7 @@ class CRM_Sepaoptimizedbatcher_Logic_Batching {
     $existing_groups,
     $mode,
     $notice,
-    $creditor_id,
-    $partial_groups=FALSE,
-    $partial_first=FALSE
+    $creditor_id
   ) {
     $group_status_id_open = (int) CRM_Core_PseudoConstant::getKey('CRM_Batch_BAO_Batch', 'status_id', 'Open');
 
@@ -434,16 +421,6 @@ class CRM_Sepaoptimizedbatcher_Logic_Batching {
 
         // remove all the unwanted entries from our group
         $entity_ids_list = implode(',', $entity_ids);
-        if (!$partial_groups || $partial_first) {
-          CRM_Core_DAO::executeQuery(
-            <<<SQL
-                DELETE FROM civicrm_sdd_contribution_txgroup
-                  WHERE
-                    txgroup_id=$group_id
-                    AND contribution_id NOT IN ($entity_ids_list);
-                SQL
-          );
-        }
 
         // remove all our entries from other groups, if necessary
         CRM_Core_DAO::executeQuery(
@@ -480,11 +457,6 @@ class CRM_Sepaoptimizedbatcher_Logic_Batching {
         }
       }
     }
-
-    if (!$partial_groups) {
-      // do some cleanup
-      CRM_Sepa_Logic_Group::cleanup($mode);
-    }
   }
 
   public static function getOrCreateTransactionGroup(
@@ -499,6 +471,10 @@ class CRM_Sepaoptimizedbatcher_Logic_Batching {
 
     if (!isset($existing_groups[$collection_date][$financial_type_id ?? 0])) {
       // this group does not yet exist -> create
+      $group_id = self::getTransactionGroupId($creditor_id, $mode, $collection_date, $financial_type_id);
+      if ($group_id) {
+        return $group_id;
+      }
 
       // find unused reference
       $reference = self::getTransactionGroupReference($creditor_id, $mode, $collection_date, $financial_type_id);
@@ -526,6 +502,26 @@ class CRM_Sepaoptimizedbatcher_Logic_Batching {
     }
 
     return (int) $group['id'];
+  }
+
+  public static function getTransactionGroupId($creditor_id, $mode, $collection_date, $financial_type_id):? int {
+    $group_status_id_open = (int) CRM_Core_PseudoConstant::getKey('CRM_Batch_BAO_Batch', 'status_id', 'Open');
+    $sql = "SELECT `id` FROM `civicrm_sdd_txgroup` WHERE `sdd_creditor_id` = %1 AND `type` = %2 AND DATE(`collection_date`) = %3 AND `status_id` = %4";
+    $sqlParams[1] = [$creditor_id, 'Integer'];
+    $sqlParams[2] = [$mode, 'String'];
+    $sqlParams[3] = [$collection_date, 'String'];
+    $sqlParams[4] = [$group_status_id_open, 'Integer'];
+    if ($financial_type_id) {
+      $sql .= " AND `fincial_type_id` = %5";
+      $sqlParams[5] = [$financial_type_id, 'Integer'];
+    } else {
+      $sql .= " AND `financial_type_id` IS NULL";
+    }
+    $id = \CRM_Core_DAO::singleValueQuery($sql, $sqlParams);
+    if ($id) {
+      return $id;
+    }
+    return null;
   }
 
   /**

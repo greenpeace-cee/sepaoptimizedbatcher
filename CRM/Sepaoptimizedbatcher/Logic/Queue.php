@@ -204,6 +204,7 @@ class CRM_Sepaoptimizedbatcher_Logic_Queue {
     $mode = $params['mode'] ?? '[unknown]';
     $offset = $params['offset'] ?? 0;
     $limit = $params['limit'] ?? 0;
+    $ids = $params['ids'] ?? [];
     if (isset($params['user_job_id'])) {
       self::$currentUserJobId = $params['user_job_id'];
     }
@@ -221,6 +222,7 @@ class CRM_Sepaoptimizedbatcher_Logic_Queue {
         break;
 
       case 'PREPARE_COLLECTION_DATE':
+        $increateTaskCount = 0;
         $queue = $context->queue;
         $bgqueue_enabled = (bool) Civi::settings()->get('enableBackgroundQueue');
         $weight = 4;
@@ -259,6 +261,7 @@ class CRM_Sepaoptimizedbatcher_Logic_Queue {
         break;
       
       case 'PREPARE_UPDATE':
+        $increateTaskCount = 0;
         $queue = $context->queue;
         $bgqueue_enabled = (bool) Civi::settings()->get('enableBackgroundQueue');
         $weight = 6;
@@ -275,29 +278,42 @@ class CRM_Sepaoptimizedbatcher_Logic_Queue {
             'type'   => 'SqlParallel',
           ]);
           $weight = 0;
+          $increateTaskCount++;
         }
 
-        $now = 'now';
         $creditors = civicrm_api3('SepaCreditor', 'get', array('option.limit' => 0));
         foreach ($creditors['values'] as $creditor) {
           $horizon = (int) CRM_Sepa_Logic_Settings::getSetting("batching.RCUR.horizon", $creditor['id']);
-          $latest_date = date('Y-m-d', strtotime("$now +$horizon days"));
+          $latest_date = date('Y-m-d', strtotime("now +$horizon days"));
           $sdd_modes = array('FRST', 'RCUR');
           foreach ($sdd_modes as $sdd_mode) {
-            $relevantMandateCount = \Civi\Api4\SepaMandate::get(TRUE)
+            $relevantMandates = \Civi\Api4\SepaMandate::get(TRUE)
               ->selectRowCount()
+              ->addSelect('id')
               ->addJoin('ContributionRecur AS contribution_recur','INNER', ['entity_table', '=', '"civicrm_contribution_recur"'],['entity_id', '=', 'contribution_recur.id'])
               ->addJoin('Contribution AS first_contribution','LEFT',['first_contribution_id', '=', 'first_contribution.id'])
               ->addWhere('type', '=', 'RCUR')
               ->addWhere('status', '=', $sdd_mode)
               ->addWhere('creditor_id', '=', $creditor['id'])
               ->addWhere('contribution_recur.next_sched_contribution_date', '<=', $latest_date)
-              ->execute()
-              ->countMatched();
-            for ($offset=0; $offset < $relevantMandateCount; $offset+=self::BATCH_SIZE) {
-              // add an item for each batch
-              $queue->createItem(self::createTask('UPDATE', ['mode'=>$sdd_mode, 'creditor_id' => $creditor['id'], 'offset' => $offset, 'limit' => self::BATCH_SIZE, 'count' => $relevantMandateCount]), ['weight' => $weight]);
+              ->setLimit(0)
+              ->execute();
+            $ids = [];
+            $relevantMandateCount = $relevantMandates->countMatched();
+            $offset = 0;
+            foreach($relevantMandates as $relevantMandate) {
+              $ids[] = $relevantMandate['id'];
+              if (count($ids) >= self::BATCH_SIZE) {
+                $queue->createItem(self::createTask('UPDATE', ['mode'=>$sdd_mode, 'creditor_id' => $creditor['id'], 'ids' => $ids, 'offset' => $offset, 'limit' => count($ids), 'count' => $relevantMandateCount]), ['weight' => $weight]);
+                $increateTaskCount++;
+                $offset = $offset + count($ids);
+                $ids = [];
+              }
+            }
+            if (count($ids)) {
+              $queue->createItem(self::createTask('UPDATE', ['mode'=>$sdd_mode, 'creditor_id' => $creditor['id'], 'ids' => $ids, 'offset' => $offset, 'limit' => count($ids), 'count' => $relevantMandateCount]), ['weight' => $weight]);
               $increateTaskCount++;
+              $ids = [];
             }
           }
         }
@@ -322,7 +338,7 @@ class CRM_Sepaoptimizedbatcher_Logic_Queue {
         break;  
 
       case 'UPDATE':
-        CRM_Sepaoptimizedbatcher_Logic_Batching::updateRCUR($creditorId, $mode, 'now', $offset, $limit);
+        CRM_Sepaoptimizedbatcher_Logic_Batching::updateRCUR($creditorId, $mode, 'now', $ids);
         break;
 
       case 'CLEANUP':

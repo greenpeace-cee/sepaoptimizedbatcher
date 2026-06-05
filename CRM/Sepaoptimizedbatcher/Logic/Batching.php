@@ -157,6 +157,7 @@ class CRM_Sepaoptimizedbatcher_Logic_Batching {
         ORDER BY `contribution_recur`.`next_sched_contribution_date` ASC";
     $dao = CRM_Core_DAO::executeQuery($sql);
     while($dao->fetch()) {
+      $mandate = [];
       $mandate['id'] = $dao->id;
       $mandate['contact_id'] = $dao->contact_id;
       $mandate['contribution_recur.contact_id'] = $dao->contact_id;
